@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { APIProvider, Map, AdvancedMarker, InfoWindow, useMapsLibrary, useMap } from '@vis.gl/react-google-maps';
 import { GoogleGenAI } from '@google/genai';
 
-const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || GOOGLE_API_KEY;
 
-// Initialize Gemini Client for Autonomous Agent Operations
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 function EagleIcon({ size = 22, color = '#00ffcc' }) {
@@ -17,17 +16,17 @@ function EagleIcon({ size = 22, color = '#00ffcc' }) {
   );
 }
 
-// Fallback tactical generator if API encounters temporary 503 service congestion
+// Fallback tactical generator if API or Places network encounters limitations
 function getFallbackNodes(targetName, baseCoords, startStr) {
   const videoIds = ['jNQXAC9IVRw', 'kJQP7kiw5Fk', '9bZkp7q19f0', 'LXb3EKWsInQ', '5qap5aO4i9A'];
   const nodeTypes = ['NEWS', 'LANDMARK', 'VIDEO'];
   
-  return Array.from({ length: 12 }).map((_, idx) => {
+  return Array.from({ length: 8 }).map((_, idx) => {
     const type = nodeTypes[idx % 3];
     return {
       id: `fallback_node_${idx}`,
       type: type,
-      title: `${targetName} Autonomous Recon Sector ${idx + 1}`,
+      title: `${targetName} Secure Sector Node ${idx + 1}`,
       description: `Verified operational sector report logged within range for ${targetName}.`,
       extractedPlace: `${targetName} Zone ${idx + 1}`,
       source: 'GARUDAN_TACTICAL_FALLBACK',
@@ -36,91 +35,112 @@ function getFallbackNodes(targetName, baseCoords, startStr) {
       image: 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=300&q=80',
       publishedAt: startStr,
       position: {
-        lat: baseCoords.lat + ((idx % 4 - 2) * 0.005),
-        lng: baseCoords.lng + ((Math.floor(idx / 4) - 2) * 0.005)
+        lat: baseCoords.lat + ((idx % 3 - 1) * 0.006),
+        lng: baseCoords.lng + ((Math.floor(idx / 3) - 1) * 0.006)
       }
     };
   });
 }
 
-// Autonomous Agent Intelligence Loop with 503 Exponential Backoff Retry & Fallback
-async function runIntelligenceAgent(targetName, baseCoords, startStr, endStr) {
-  const maxRetries = 3;
-  let attempt = 0;
-
-  while (attempt < maxRetries) {
-    try {
-      const prompt = `
-        You are GARUDAN Agent, an autonomous geospatial intelligence coordinator.
-        Analyze target location: "${targetName}" centered at latitude ${baseCoords.lat}, longitude ${baseCoords.lng}.
-        Time window: ${startStr} to ${endStr}.
-        
-        Search for real, highly relevant news stories, infrastructure landmarks, and publicly available video coverage specifically concerning "${targetName}". 
-        
-        Generate between 10 to 14 diverse intelligence markers for this location (mix of NEWS, LANDMARK, and VIDEO types).
-        For items marked as type "VIDEO", you must use one of these verified global streaming IDs: 'jNQXAC9IVRw', 'kJQP7kiw5Fk', '9bZkp7q19f0', 'LXb3EKWsInQ', '5qap5aO4i9A'.
-        
-        CRITICAL INSTRUCTION: You must respond ONLY with a raw JSON array. Do not wrap it in markdown code blocks, do not include conversational filler text. Schema:
-        [
-          {
-            "id": "node_1",
-            "type": "NEWS",
-            "title": "Headline title for target",
-            "description": "Short tactical summary description under 130 characters.",
-            "extractedPlace": "Landmark name",
-            "source": "VERIFIED_AGENT_FEED",
-            "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
-            "videoId": "jNQXAC9IVRw",
-            "image": "https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=300&q=80",
-            "offsetLat": 0.002,
-            "offsetLng": -0.001
-          }
-        ]
-        Ensure offsetLat and offsetLng use coordinate variations (between -0.02 and 0.02) to cleanly scatter pins.
-      `;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }]
-        }
-      });
-
-      let textData = response.text.trim();
-      if (textData.startsWith('```')) {
-        textData = textData.replace(/^```json?\s*/, '').replace(/```\s*$/, '');
-      }
-
-      const parsedNodes = JSON.parse(textData);
-
-      return parsedNodes.map((node, idx) => ({
-        id: node.id || `agent_node_${idx}`,
-        type: node.type || (idx % 3 === 0 ? 'VIDEO' : 'NEWS'),
-        title: node.title || `${targetName} Sector Event`,
-        description: node.description || 'Verified agent reconnaissance log.',
-        extractedPlace: node.extractedPlace || targetName,
-        image: node.image || '[https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=300&q=80](https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=300&q=80)',
-        source: node.source || 'GARUDAN_AGENT',
-        url: node.url || '#',
-        videoId: node.type === 'VIDEO' ? (node.videoId || 'jNQXAC9IVRw') : '',
-        publishedAt: startStr,
-        position: {
-          lat: baseCoords.lat + (node.offsetLat || ((idx % 4 - 2) * 0.004)),
-          lng: baseCoords.lng + (node.offsetLng || ((Math.floor(idx / 4) - 2) * 0.004))
-        }
-      }));
-    } catch (err) {
-      attempt++;
-      console.warn(`Agent intelligence loop attempt ${attempt} failed:`, err);
-      if (attempt >= maxRetries) {
-        console.warn("Max retries reached due to server congestion (503). Engaging tactical fallback grid.");
-        return getFallbackNodes(targetName, baseCoords, startStr);
-      }
-      // Exponential backoff delay with jitter (2s, 4s, 8s...)
-      const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
+async function enrichPlacesWithAgentIntelligence(targetName, rawPlaces, startStr, endStr) {
+  try {
+    if (!rawPlaces || rawPlaces.length === 0) {
+      return [];
     }
+
+    const placesContext = rawPlaces.map((p, idx) => `
+      Index: ${idx}
+      Name: ${p.name}
+      Address: ${p.vicinity || p.formatted_address || 'N/A'}
+      Lat: ${typeof p.geometry.location.lat === 'function' ? p.geometry.location.lat() : p.geometry.location.lat}
+      Lng: ${typeof p.geometry.location.lng === 'function' ? p.geometry.location.lng() : p.geometry.location.lng}
+    `).join('\n');
+
+    const prompt = `
+      You are GARUDAN Agent, an advanced geospatial intelligence coordinator.
+      Target Location Context: "${targetName}"
+      Time Window: ${startStr} to ${endStr}
+      
+      Below is a list of REAL, verified locations retrieved via Google Maps SDK for this sector:
+      ${placesContext}
+
+      For each place provided above, generate tactical intelligence metadata. Categorize each into 'NEWS', 'LANDMARK', or 'VIDEO'. 
+      For items designated as 'VIDEO', use one of these verified media stream IDs: ['jNQXAC9IVRw', 'kJQP7kiw5Fk', '9bZkp7q19f0', 'LXb3EKWsInQ', '5qap5aO4i9A'].
+      
+      CRITICAL: Respond ONLY with a valid JSON array matching the exact number of input places. No markdown blocks, no conversational text. Schema:
+      [
+        {
+          "index": 0,
+          "type": "LANDMARK",
+          "title": "Tactical designation title",
+          "description": "Concise operational summary under 120 characters.",
+          "source": "VERIFIED_MAPS_GROUNDED_FEED",
+          "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+          "videoId": ""
+        }
+      ]
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: { tools: [{ googleSearch: {} }] }
+    });
+
+    let textData = response.text.trim();
+    if (textData.startsWith('```')) {
+      textData = textData.replace(/^```json?\s*/, '').replace(/```\s*$/, '');
+    }
+
+    const enrichedMeta = JSON.parse(textData);
+
+    return rawPlaces.map((place, idx) => {
+      const meta = enrichedMeta.find(m => m.index === idx) || {};
+      const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+      const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+      const type = meta.type || (idx % 3 === 0 ? 'VIDEO' : 'LANDMARK');
+
+      let imageUrl = '[https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=300&q=80](https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=300&q=80)';
+      if (place.photos && place.photos.length > 0) {
+        try {
+          imageUrl = place.photos[0].getUrl({ maxWidth: 400 });
+        } catch (e) {
+          // fallback image
+        }
+      }
+
+      return {
+        id: `verified_node_${idx}`,
+        type: type,
+        title: meta.title || place.name,
+        description: meta.description || `Verified operational installation located at ${place.name}.`,
+        extractedPlace: place.name,
+        source: 'GARUDAN_GROUNDED_AGENT',
+        url: meta.url || '#',
+        videoId: type === 'VIDEO' ? (meta.videoId || 'jNQXAC9IVRw') : '',
+        image: imageUrl,
+        publishedAt: startStr,
+        position: { lat, lng }
+      };
+    });
+  } catch (err) {
+    console.warn("Agent enrichment warning, switching to direct parsed layout:", err);
+    return rawPlaces.map((place, idx) => ({
+      id: `fallback_node_${idx}`,
+      type: idx % 2 === 0 ? 'LANDMARK' : 'NEWS',
+      title: place.name,
+      description: `Verified coordinate node at ${place.vicinity || targetName}.`,
+      extractedPlace: place.name,
+      source: 'GARUDAN_DIRECT_MAP_FEED',
+      url: '#',
+      videoId: '',
+      image: '[https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=300&q=80](https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=300&q=80)',
+      publishedAt: startStr,
+      position: {
+        lat: typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat,
+        lng: typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng
+      }
+    }));
   }
 }
 
@@ -148,7 +168,7 @@ function PlaceSearchBox({ onPlaceSelect }) {
         onPlaceSelect(location, placeName);
         if (map) {
           map.panTo(location);
-          map.setZoom(12);
+          map.setZoom(13);
         }
       }
     });
@@ -170,6 +190,8 @@ function PlaceSearchBox({ onPlaceSelect }) {
 
 function MapContainer() {
   const map = useMap();
+  const placesLib = useMapsLibrary('places');
+  
   const [targetLocation, setTargetLocation] = useState({ lat: 9.9312, lng: 76.2673 });
   const [targetName, setTargetName] = useState('KOCHI, KERALA');
 
@@ -201,37 +223,78 @@ function MapContainer() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [calendarRef]);
 
-  const executeAgentScan = async (locationName, baseCoords, startStr, endStr) => {
+  const executeGroundedScan = useCallback(async (locationName, centerCoords, startStr, endStr) => {
+    if (!map) return;
     setLoadingIntel(true);
-    const agentNodes = await runIntelligenceAgent(locationName, baseCoords, startStr, endStr);
-    setEvents(agentNodes);
-    setLoadingIntel(false);
-  };
+
+    // Check if the Google Maps Places library is loaded
+    if (!placesLib) {
+      console.warn("Places library loading deferred, using tactical fallback grid.");
+      const fallback = getFallbackNodes(locationName, centerCoords, startStr);
+      setEvents(fallback);
+      setLoadingIntel(false);
+      return;
+    }
+
+    try {
+      const dummyDiv = document.createElement('div');
+      const service = new placesLib.PlacesService(dummyDiv);
+      const request = {
+        location: centerCoords,
+        radius: 8000,
+        keyword: 'landmark infrastructure center point'
+      };
+
+      service.nearbySearch(request, async (results, status) => {
+        if (status === placesLib.PlacesServiceStatus.OK && results && results.length > 0) {
+          const topPlaces = results.slice(0, 10);
+          const groundedNodes = await enrichPlacesWithAgentIntelligence(locationName, topPlaces, startStr, endStr);
+          setEvents(groundedNodes);
+          setLoadingIntel(false);
+        } else {
+          // Fallback to text search if nearby search returns zero results
+          service.textSearch({ query: `${locationName} landmarks attractions` }, async (textResults, textStatus) => {
+            if (textStatus === placesLib.PlacesServiceStatus.OK && textResults && textResults.length > 0) {
+              const topPlaces = textResults.slice(0, 10);
+              const groundedNodes = await enrichPlacesWithAgentIntelligence(locationName, topPlaces, startStr, endStr);
+              setEvents(groundedNodes);
+            } else {
+              setEvents(getFallbackNodes(locationName, centerCoords, startStr));
+            }
+            setLoadingIntel(false);
+          });
+        }
+      });
+    } catch (e) {
+      console.error("Error executing places lookup:", e);
+      setEvents(getFallbackNodes(locationName, centerCoords, startStr));
+      setLoadingIntel(false);
+    }
+  }, [map, placesLib]);
 
   useEffect(() => {
     if (map) {
-      executeAgentScan(targetName, targetLocation, startDate, endDate);
+      executeGroundedScan(targetName, targetLocation, startDate, endDate);
     }
-  }, [map]);
+  }, [map, executeGroundedScan, targetLocation, targetName, startDate, endDate]);
 
   const handleApplyDateRange = () => {
     setShowCalendar(false);
-    executeAgentScan(targetName, targetLocation, startDate, endDate);
+    executeGroundedScan(targetName, targetLocation, startDate, endDate);
   };
 
   return (
-    <>
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <div style={styles.hudTopBar}>
         <div style={styles.brandGroup}>
           <EagleIcon size={24} color="#00ffcc" />
-          <div style={styles.hudTitle}>SYSTEM: GARUDAN v4.7 AGENT-OMNI</div>
+          <div style={styles.hudTitle}>SYSTEM: GARUDAN v5.1 AGENT-OMNI</div>
         </div>
         
         <div style={styles.controlsGroup}>
           <PlaceSearchBox onPlaceSelect={(loc, name) => {
             setTargetLocation(loc);
             setTargetName(name.toUpperCase());
-            executeAgentScan(name, loc, startDate, endDate);
           }} />
 
           <div style={{ position: 'relative' }} ref={calendarRef}>
@@ -278,7 +341,7 @@ function MapContainer() {
       <div style={styles.telemetryPanel}>
         <div style={styles.panelHeader}>
           <EagleIcon size={14} color="#00b3ff" />
-          <span>GARUDAN AGENT SURVEILLANCE FEED</span>
+          <span>GARUDAN GROUNDED PLACES SURVEILLANCE</span>
         </div>
         <div><span style={styles.label}>TARGET_ID:</span> {targetName}</div>
         <div><span style={styles.label}>LATITUDE:</span> {targetLocation.lat.toFixed(6)}</div>
@@ -287,18 +350,20 @@ function MapContainer() {
           <span style={styles.label}>TIME_WINDOW:</span> 
           <span style={{ color: '#00ffcc' }}>{startDate} ➔ {endDate}</span>
         </div>
-        <div><span style={styles.label}>INTEL_SOURCES:</span> <span style={{ color: '#00ffcc' }}>GEMINI AI AGENT + GROUNDING</span></div>
-        <div><span style={styles.label}>TARGETS_PINNED:</span> {loadingIntel ? 'SYNTHESIZING INTEL...' : events.length}</div>
+        <div><span style={styles.label}>INTEL_TECHNIQUE:</span> <span style={{ color: '#00ffcc' }}>MAPS SDK PLACES + GEMINI AGENT</span></div>
+        <div><span style={styles.label}>TARGETS_PINNED:</span> {loadingIntel ? 'RESOLVING PLACES...' : events.length}</div>
       </div>
 
       <div style={styles.crosshairOverlay} />
 
       <Map
         defaultCenter={targetLocation}
-        defaultZoom={11}
+        center={targetLocation}
+        defaultZoom={12}
         mapId={'DEMO_MAP_ID'}
         disableDefaultUI={true}
         gestureHandling={'greedy'}
+        style={{ width: '100%', height: '100%' }}
       >
         <AdvancedMarker position={targetLocation}>
           <div style={styles.targetReticle}>
@@ -339,7 +404,7 @@ function MapContainer() {
                   title={selectedEvent.title}
                   width="100%"
                   height="140"
-                  src={`https://www.youtube.com/embed/${selectedEvent.videoId}?autoplay=1`}
+                  src={`[https://www.youtube.com/embed/$](https://www.youtube.com/embed/$){selectedEvent.videoId}?autoplay=1`}
                   frameBorder="0"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
@@ -365,13 +430,21 @@ function MapContainer() {
           </InfoWindow>
         )}
       </Map>
-    </>
+    </div>
   );
 }
 
 export default function App() {
+  if (!GOOGLE_API_KEY) {
+    return (
+      <div style={{ background: '#000', color: '#ff0055', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', padding: '20px', textAlign: 'center' }}>
+        CRITICAL ERROR: VITE_GOOGLE_MAPS_API_KEY is missing from your environment variables (.env file).
+      </div>
+    );
+  }
+
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#000' }}>
+    <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#000', overflow: 'hidden' }}>
       <APIProvider apiKey={GOOGLE_API_KEY} libraries={['places']}>
         <MapContainer />
       </APIProvider>
